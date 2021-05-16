@@ -37,19 +37,10 @@ server is a node written in python, javascript or C++ and can be hosted anywhere
 Machine to machine, machine to software or software to software communication using MQTT, PlainTalk or REST.
 
 
+Running
+--------
 
-Repositories
-------------------
-- Plaintalk: Persistent Connection, queue, plaintalk
-  - python
-  - cpp
-  - javascript
-  - c# 
-- NodeWire Client: 
-  - python and micropython
-  - c++ and arduino
-  - javascript and reactjs
-  - c# and dotnetcore
-- NodeWire Server: cp, ee, db, mqtt, rest
-- NodeWire Develop: dashboard, scripting, graphs, sketch
-- Documentation
+```bash
+cd cp
+python cp
+```
