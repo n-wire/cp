@@ -1,9 +1,12 @@
 import sys
 from message import Message
-from db import mongo_client
+from config import mongo_client
 import asyncio
 import time
 import random
+import string
+from websockets.exceptions import ConnectionClosedError
+import jwt
 
 class Link:
     def __init__(self, messages):
@@ -12,6 +15,7 @@ class Link:
         self.client_done = None
         self.sys_db = mongo_client.nodewire
         self.messages = messages
+        self.session = None
 
         self.gateway = None
         self.seqn = 0
@@ -41,28 +45,41 @@ class Link:
         if (await self.authenticated()):
             while True:
                 try:
-                    data = (await self.receive())
+                    data = await self.receive()
                     self.last_seen = time.time()
                     if not data:  # an empty string means the client disconnected
                         # cp => if the_gw in self.clients: self.clients.remove(the_gw)  # todo renumber the clients
                         break
                     msg = Message(data)
-                    if not msg.sender_instance: data = data[:data.rfind(' ')] + ' ' + self.gateway + ':' + msg.sender
-                    if not msg.address_instance: data = self.gateway + ':' + data
-                    if msg.sender in self.nodes or msg.address == 'cp':
-                        self.messages.put_nowait((data + '\n', self))
+                    if self.safe:
+                        if msg.sender_full not in self.nodes: 
+                            # a safe link has nodes from a different process, we should add them here so they are able to receive a response
+                            self.nodes.append(msg.sender_full) 
+                    else:
+                        if not msg.sender_instance: data = data[:data.rfind(' ')] + ' ' + self.gateway + ':' + msg.sender
+                        if not msg.address_instance: data = self.gateway + ':' + data
+                    if msg.sender in self.nodes or msg.address == 'cp' or self.safe:
+                        self.messages.put_nowait((data, self.task))
                 except asyncio.CancelledError as ex:
                     break
-                except (ConnectionResetError, BrokenPipeError) as ex:
+                except (ConnectionResetError, BrokenPipeError, ConnectionClosedError) as ex:
                     break
-            self.close()
+                except:
+                    break
+        self.close()
 
     async def authenticated(self):
-        if self.safe: return True
+        if self.safe: 
+            # safe links connects nodes from a different process. the other process will be responsible for authentication
+            return self.new(self)
         try:
             words = (await self.receive()).split()
             return await self.login(words)
         except ConnectionResetError:
+            pass
+        except ConnectionClosedError:
+            pass
+        except Exception:
             pass
         return False
 
@@ -70,26 +87,42 @@ class Link:
         if len(words) >= 3 and words[1] == 'Gateway':
             try:
                 d_user = None
-                user = words[2].split('=')[1].strip() if 'user' in words[2] and '=' in words[2] else ''
-                id = words[2].split('=')[1].strip() if 'id' in words[2] and '=' in words[2] else ''
-                key = words[2].split('=')[1].strip() if 'key' in words[2] and '=' in words[2] else ''
-
-                if user:
-                    password = words[3].split('=')[1].strip() if 'pwd' in words[3] and '=' in words[3] else ''
+                if len(words) == 3:
+                    if words[2].startswith('token'):
+                        token = words[2].split('=')[1]
+                        decoded = jwt.decode(token, 'this is my secret', algorithms=['HS256'])
+                        if 'exp' in decoded and time.time() > decoded['exp']: return False
+                        user = decoded['email']
+                        gateway = decoded['instance']
+                        password = None
+                    else:
+                        return False
                 else:
-                    password = ''
+                    user = words[2].split('=')[1].strip() if 'user' in words[2] and '=' in words[2] else ''
+                    id = words[2].split('=')[1].strip() if 'id' in words[2] and '=' in words[2] else ''
+                    key = words[2].split('=')[1].strip() if 'key' in words[2] and '=' in words[2] else ''
+
+                    if user:
+                        password = words[3].split('=')[1].strip() if 'pwd' in words[3] and '=' in words[3] else ''
+                    else:
+                        password = ''
                 '''
-                    there are three authentication methods
+                    there are four authentication methods
                     1. usernamen and password:
-                       cp Gateway user=username pwd=password instance
-                    2. uuid: this is used to register a new gateway. This can only be used once.
-                       cp Gateway id=uuid
-                    3. uuid and token
-                       cp Gateway key=token uuid
+                        cp Gateway user=username pwd=password instance
+                    2. token: 
+                        cp Gateway token=access_token
+                    3. uuid and key
+                        cp Gateway key=secret uuid
+                    4. uuid: this is used to register a new gateway. This can only be used once. subsequent calls must use method 3
+                        cp Gateway id=uuid
+                    
                 '''
                 if user and password:
                     gateway = words[-1]
                     d_user = await self.sys_db.users.find_one({'email': user, 'password': password, 'instance': gateway}, {'layout': 0, 'gateways': 0})
+                elif token:
+                     d_user = await self.sys_db.users.find_one({'email': user}, {'layout': 0})
                 elif key:
                     d_user = await self.sys_db.users.find_one({'tokens': {'id': words[-1], 'token': key}}, {'layout': 0, 'gateways': 0})
                     if d_user:
@@ -104,56 +137,37 @@ class Link:
                             await self.sys_db.users.replace_one({'email': d_user['email']}, d_user)
                             gateway = words[-1] = d_user['instance']+':'+token_gen
                         else:
-                            d_user = None
+                            gateway = words[-1] = d_user['instance']+':'+d_user['tokens'][0]['token']
                     else:
                         gateway = words[-1] = id
 
                 if d_user:
-                    n = len([client for client in self.clients if client['gateway']==gateway])
                     self.gateway = gateway
-                    self.seqn = n
-                    # cp => self.send_queue: self.send_queues[self.sq_index]
-                    self.type = 'tcp'
                     self.user = d_user
                     self.last_seen = time.time()
                     self.nodes =  []
                     self.ghosts = []
-                    # cp => self.sq_index = (self.sq_index+1) % len(self.send_queues)
-                    # update number of connected gateways
-                    '''if n == 0 and gateway not in self.execution_contexts:
-                        self.execution_contexts[gateway] = context(gateway, self.when_dos, self.exec_loop, self.messages)
-                        if gateway not in self.auto_execed:
-                            kk = await self.execution_contexts[gateway].engine_process(["exec('auto')"], user)
-                            if kk == '':
-                                self.auto_execed.append(gateway)
-                                await self.execution_contexts[gateway].engine_process(["kill('auto')"], user)
-                    '''
-                    await self.sys_db.live_gateways.replace_one({'instance': gateway}, {'instance': gateway, 'count': n+1})
 
-                    # check if too many client connections
-                    if n >= 20:
-                        await self.send((words[-1] + ' too many connections cp\n').encode())
+                    if self.new and self.new(self):
+                        await self.send('{} gack {} cp'.format(gateway, self.seqn))
+                        await self.send('any ping cp')
+                        return True
+                    else:
+                        await self.send(words[-1] + ' connection rejected cp')
                         await asyncio.sleep(30)
                         self.close()
                         return False
-
-                    # cp => self.clients.append (the_gw)
-                    await self.send(('{} gack {} cp\n'.format(gateway, n)).encode())
-                    await self.send('any ping cp\n'.encode())
-
-                    return True
                 else:
-                    await self.send(((words[-1] if len(words) != 0 else 'any') + ' authfail cp\n').encode())
+                    await self.send((words[-1] if len(words) != 0 else 'any') + ' authfail cp')
                     self.close()
                     return False
             except Exception as ex:
                 print('auth  error')
                 print(ex)
-                await self.send((words[-1] + ' autherror cp\n').encode())
+                await self.send(words[-1] + ' autherror cp')
                 self.close()
                 return False
         else:
-            await self.send(((words[-1] if len(words)!=0 else 'any') + ' authmissing cp\n').encode())
+            await self.send((words[-1] if len(words)!=0 else 'any') + ' authmissing cp')
             self.close()
             return False
-        

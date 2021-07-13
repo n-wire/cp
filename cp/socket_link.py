@@ -16,17 +16,17 @@ class SocketLink(Link):
         the_link.reader = client_reader
         the_link.writer =  client_writer
         the_link.client_done = self.client_done
+        the_link.new = self.new
         the_link.safe = self.safe
             
-        if self.new: self.new(the_link)
-        task = asyncio.Task(the_link.loop(client_reader, client_writer))
-        task.add_done_callback(the_link.client_done)
+        the_link.task = asyncio.Task(the_link.loop(client_reader, client_writer))
+        the_link.task.add_done_callback(the_link.client_done)
 
     async def loop(self, client_reader, client_writer):
         await self.main_loop()
 
     async def send(self, data):
-        self.writer.write(f'{data}\n'.encode())
+        self.writer.write(f'{data}\r\n'.encode())
         await self.writer.drain()
 
     async def receive(self):

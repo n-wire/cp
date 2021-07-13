@@ -1,20 +1,49 @@
 import json
 
+__all__ = ('Message')
+
 class Message:
     def __init__(self, content):
-        words = self.split(content)
-        self.address_instance, self.address = words[0].split(':') if ':' in words[0] else ('', words[0])
-        self.command = words[1] if len(words)>1 else None
-        self.params = words[2:-1] if len(words)>2 else None
-        self.port = words[2] if len(words)>=4 else None
         try:
-            self.value = json.loads(words[3]) if len(words)>=5 else None
-        except:
+            words = self.split(content)
+            self.address_instance, self.address = words[0].split(':') if ':' in words[0] else ('', words[0])
+            self.command = words[1] if len(words)>1 else None
+            self.params = words[2:-1] if len(words)>2 else None
+            self.port = words[2] if len(words)>=4 else None
+            if self.command == 'porvalue': self.command = 'val'
+            try:
+                self.value = json.loads(words[3]) if len(words)>=5 else None
+            except:
+                self.value = None
+            self.sender_instance, self.sender = words[-1].split(':') if ':' in words[-1] else ('', words[-1])
+            if self.sender_instance == '':
+                self.sender_instance = self.address_instance
+            elif self.address_instance == '':
+                self.address_instance = self.sender_instance
+            self.named_params = {}
+            for para in self.params:
+                if '=' in para: 
+                    vals = para.split('=')
+                    self.named_params[vals[0]] = vals[1]
+        except Exception as ex:
+            self.command = 'error'
+            self.port = str(ex).split()
+            self.params = []
             self.value = None
-        self.sender_instance, self.sender = words[-1].split(':') if ':' in words[-1] else ('', words[-1])
+            self.sender_instance = self.address_instance = ''
+            self.sender = self.address = ''
+
+
+    @property
+    def sender_full(self):
+        return f'{self.sender_instance}:{self.sender}'
+
+    @property
+    def address_full(self):
+        return f'{self.address_instance}:{self.address}'
 
     def __str__(self):
-        return self.address + ' ' + self.command + ' ' + ' '.join(p for p  in self.params) + (' ' if self.sender_instance=='' else f' :{self.sender_instance} ') + self.sender
+        return self.address + ' ' + self.command + ' ' + ' '.join(p for p  in self.params) + (' ' if self.sender_instance=='' else f' {self.sender_instance}:') + self.sender
 
     def split(self, s):
         def opposite(c):
