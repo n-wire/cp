@@ -1,6 +1,6 @@
 from link import Link
 from broker import NodeWireBroker
-from message import Message
+from nodewire import Message
 import asyncio
 import time
 
