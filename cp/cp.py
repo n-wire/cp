@@ -1,5 +1,5 @@
 import asyncio
-from message import Message
+from nodewire import Message
 from socket_link import SocketLink
 from web_link import WebLink
 from mqtt_link import MqttLink
@@ -11,7 +11,6 @@ from bson.objectid import ObjectId
 import time
 
 from datetime import datetime, timedelta
-
 from config import mongo_client
 
 
@@ -120,7 +119,7 @@ class CommandProcessor:
             if client in self.clients:
                 self.clients.remove(client)
                 for node in client.nodes:
-                    if node in self.execution_contexts[client.gateway].pvs:
+                    if client.gateway is not None and node in self.execution_contexts[client.gateway].pvs:
                         try:
                             self.execution_contexts[client.gateway].pvs.remove(node)
                             thenode = [n for n in self.execution_contexts[client.gateway].variables['nodes'] if
@@ -196,7 +195,7 @@ class CommandProcessor:
                     self.messages.put_nowait((raw, None))
                 else:
                     try:
-                        await subscriber['client'].send(str(msg))
+                        await subscriber['client'].send(raw)
                     except:
                         self.terminate_connections([subscriber['client']])
                         self.subscriptions.remove(subscriber)
@@ -478,7 +477,7 @@ class CommandProcessor:
         n_gateway = await self.sys_db.instances.find_one({'instance_id': g})
         d_user = await self.sys_db.users.find_one({'email': u})
         # u_gateway = await self.sys_db.instances.find_one({'instance_id': gu})
-        if not d_user:
+        if d_user is None:
             try:
                 client = [client for client in self.clients if client.gateway == gu and u in client.nodes]
                 if client != []:
@@ -486,6 +485,8 @@ class CommandProcessor:
                 elif u in self.execution_contexts[g].apps:
                     email = self.execution_contexts[g].owners[u]
                     d_user = await self.sys_db.users.find_one({'email': email})
+                else:
+                    raise Exception('Node or User "{}" does not exist'.format(u))
             except Exception as ex:
                 raise Exception('Node or User "{}" does not exist'.format(u))
 
@@ -603,7 +604,7 @@ class CommandProcessor:
                                client.gateway == message.sender_instance]
                     nodes = []
                     for nodegroup in nodeses: nodes = nodes + nodegroup
-                    response = '{} ghosts {} cp'.format(message.sender, ' '.join(nodes))
+                    response = '{} ghosts {} {}:cp'.format(message.sender, ' '.join(nodes), message.sender_instance)
                     self.messages.put_nowait((response, None))
                 elif message.params[0] == 'gateways':
                     def fdate(t):
@@ -632,12 +633,15 @@ class CommandProcessor:
                     self.messages.put_nowait((response, None))
             elif message.command == 'set':
                 if message.params[0] == 'id':  # cp set id node_name id_code new_name sender
-                    client = \
-                    [c for c in self.clients if message.params[1] in c.ghosts and c.gateway == message.sender_instance][
-                        0]
-                    client.ghosts.remove(message.params[1])
-                    await client.send('{} set id {} cp'.format(message.params[1], message.params[2]))
-                    await client.send('{} set name {} cp'.format(message.params[1], message.params[3]))
+                    clients = [c for c in self.clients if message.params[1] in c.ghosts and c.gateway == message.sender_instance]
+                    if clients:
+                        client = clients[0]
+                        client.ghosts.remove(message.params[1])
+                        try:
+                            await client.send('{} set id {} cp'.format(message.params[1], message.params[2]))
+                            await client.send('{} set name {} cp'.format(message.params[1], message.params[3]))
+                        except:
+                             self.terminate_connections(clients)
                 elif message.params[0] == 'reset':  # reset all conections from this instance
                     clients = [c for c in self.clients if c.gateway == message.sender_instance]
                     self.terminate_connections(clients)
@@ -707,11 +711,8 @@ class CommandProcessor:
                     clients = [client for client in self.clients if task == client.task]
                     client = clients[0] if len(clients) != 0 else None
                     target = message.params[0] if ':' in message.params[0] else message.sender_instance + ':' + message.params[0]
-                    if len([s for s in self.subscriptions if s['target'] == target and s['command'] == message.params[1]
-                                                            and s['subscriber'] == message.sender and s['client'] != None]) == 0:
-                        self.subscriptions.append(
-                            {'target': target, 'command': message.params[1], 'subscriber': message.sender_full,
-                             'client': client})
+                    if len([s for s in self.subscriptions if s['target'] == target and s['command'] == message.params[1] and s['subscriber'] == message.sender_full and s['client'].task==client.task]) == 0:
+                        self.subscriptions.append({'target': target, 'command': message.params[1], 'subscriber': message.sender_full, 'client': client})
         else:
             client = [c for c in self.clients if message.sender in c.ghosts and c.gateway == message.sender_instance]
             if client:
@@ -731,9 +732,14 @@ class CommandProcessor:
             raw, sender = await self.messages.get()
             # print(f'received:{raw}<<')
             message = Message(raw)
+            if message.command == 'error':
+                continue
             asyncio.Task(self.handle_subscriptions(message))
             if message.address == 'cp':
-                await self.handle(message, sender)
+                try:
+                    await self.handle(message, sender)
+                except Exception as ex:
+                    print('error while handling message', ex)
             elif (message.command in ['get', 'set'] and (await self.access_allowed(message.sender_full, message.address_full, message.command)))\
                         or (not message.command in ['get', 'set'] and await self.access_allowed(message.address_full, message.sender_full, message.command)):
                 if message.address == 'db':

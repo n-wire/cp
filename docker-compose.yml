@@ -1,0 +1,33 @@
+version: "3.7"
+
+services:
+  server:
+    container_name: nw_server
+    build:
+      context: .
+    ports:
+      - 10001:10001
+      - 9001:9001
+      - 5005:5005
+      - 1883:1883
+      - 8888:8888
+    environment:
+      MONGO_DB: mongodb
+    
+  web:
+    image: ahmadmicro/nw_dashboard
+    ports:
+      - 5001:5001
+    environment:
+      MONGO_DB: mongodb
+
+  mongodb:
+    image : mongo
+    volumes:
+      - nodewire-data:/data/db
+    ports:
+      - 27017:27017
+    restart: unless-stopped
+
+volumes:
+  nodewire-data:

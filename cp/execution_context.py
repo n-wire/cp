@@ -5,12 +5,14 @@ import time
 from datetime import datetime, timedelta
 from calendar import timegm
 import copy
+from types import coroutine
 import motor.motor_asyncio
 from bson.objectid import ObjectId
 import asyncio
 import random
 import requests
 import string
+import inspect
 
 try:
     import cp.myemail as myemail
@@ -225,8 +227,10 @@ class ExecutionContext():
         elif isinstance(expr, ast.Attribute):
             more.append(expr.attr)
             await self.assign(expr.value, val, briefcase, more)
+        elif isinstance(expr, Node):
+            expr[more[0]] = await self.eval_(val, briefcase)
         else:
-            pass
+            await self.assign(await self.eval_(expr, briefcase), val, briefcase, more)
 
     async def evaluate(self, exp, briefcase):
         program = ast.parse(exp, filename=self.themodule).body
@@ -343,12 +347,6 @@ class ExecutionContext():
                 ss[f] = paras[0][f]
         return ss
 
-    async def get_token(self, email, pwd):
-        loop = asyncio.get_event_loop()
-        future1 = loop.run_in_executor(None, lambda: requests.post('http://' + 'localhost:5001' + '/auth', json={'username': email, 'password': pwd}))
-        req = await future1
-        return req.json()['access_token']
-
     async def eval_(self, node, briefcase):
         if isinstance(node, ast.Num):  # <number>
             return node.n
@@ -460,6 +458,8 @@ class ExecutionContext():
                     fun = await self.eval_(node.func,briefcase) #self.
                     if not isinstance(fun, func):
                         result = fun(*thelist)
+                        if inspect.iscoroutine(result):
+                            result = await result
                     elif fun.params.args != [] and fun.params.args[0].arg == 'self':
                         thelist = [self.get_val(node.func.value.id, briefcase)]+thelist
                         result = await self.eval_func(fun, thelist, briefcase)
@@ -543,8 +543,6 @@ class ExecutionContext():
                 elif node.func.id == 'module':
                     self.themodule = thelist[0]
                     return ''
-                elif node.func.id == 'set_debugger':
-                    return ''
                 elif node.func.id == 'print':
                     current_user = self.owners[briefcase["app"]]
                     self.messages.put_nowait(('{} val script {} {}:ee'.format(current_user, json.dumps(thelist), self.instance), None))
@@ -563,10 +561,11 @@ class ExecutionContext():
                 elif node.func.id == 'get_layout':
                     db = mongo['nodewire']
                     apps = db['apps']
-                    app = await apps.find_one({'_id':ObjectId(self.theapp)})
+                    app = await apps.find_one({'title':thelist[0]})
                     if app != None:
-                        for layout in app['layout']:
-                            layout['content'] = layout['content'].replace('\n',' ').replace('"',"'")
+                        #for layout in app['layout']:
+                        #    layout['content'] = layout['content'].replace('\n',' ').replace('"',"'")
+                        self.messages.put_nowait((f"window set xml `{app['layout'][0]['content']}` {self.instance}:ee", None))
                         return app['layout']
                     else:
                         return None
@@ -578,13 +577,14 @@ class ExecutionContext():
                     if user  == None: return 'error current user cant run scripts'
                     apps = user['apps']
                     for app_id in apps:
-                        app = await db.apps.find_one({'_id':  ObjectId(app_id)})
+                        app = await db.apps.find_one({'title':  app_id})
                         if app!=None and app['title'] == thelist[0]:
                             tmp = self.theapp[email]
                             self.theapp[email] = app['title']
                             self.reset(app['title'], email)
                             if app['title'] not in self.apps: self.apps.append(app['title'])
                             for script in app['script']:
+                                self.themodule = script['name']
                                 lines = script['content'].splitlines()
                                 await self.engine_process_file(lines, email)
                             for sketch in app['sketch']:
@@ -614,124 +614,6 @@ class ExecutionContext():
                             'authorized': self.instance in user['trust_zones']
                         }
                     return None
-                elif node.func.id == 'add_user':
-                    try:
-                        db = mongo['nodewire']
-                        user = await db.users.find({'email': thelist[0]}).to_list(None)
-                        if user == []:
-                            user = {
-                                'email': thelist[0],
-                                'fullname': thelist[1],
-                                'instance': None,
-                                'password': thelist[2],
-                                'trust_zones': [self.instance, ],
-                                'layout': {},  # current app
-                                'apps': []  # list of app_ids
-                            }
-                            await db.users.insert_one(user)
-                        elif user[0]['instance']!=self.instance:
-                            if self.instance in user[0]['trust_zones']:
-                                return None
-                            user[0]['trust_zones'].append(self.instance)
-                            await db.users.replace_one({'email': thelist[0]}, user[0])
-                            user = user[0]
-                        else:
-                            return None
-
-                        token = await self.get_token(thelist[0], user['password'])
-
-                        loop = asyncio.get_event_loop()
-                        if myemail is not None:
-                            future1 = loop.run_in_executor(None,
-                                                        lambda: myemail.send({
-                                "receiver": thelist[0],
-                                "subject": "NodeWire Account Creation",
-                                "body": f'''Dear {user['fullname']}<br><br>
-
-                                Your NodeWire App Account has been created.<br><br>
-
-                                Please click on the following link within one hour to confirm your account:<br>
-                                <a href="http://dashboard.nodewire.org/?tok={token}">Go to NodeWire Dashboard</a><br><br>
-
-                                Regards<br><br>
-
-
-                                NodeWire
-                                '''
-                            }))
-                            await future1
-
-                            future1 = loop.run_in_executor(None,
-                            lambda: myemail.send({
-                                "receiver": 'sadiq.a.ahmad@gmail.com',
-                                "subject": "NodeWire Account Creation",
-                                "body": f'''Dear {user['fullname']}<br>
-
-                                    Your NodeWire App Account has been created.<br><br>
-
-                                    Please click on the following link within one hour to confirm your account:
-                                    <a href="http://dashboard.nodewire.org/?tok={token}">Go to NodeWire Dashboard</a><br>
-
-                                    Regards<br><br>
-
-
-                                    NodeWire
-                                    '''
-                            }))
-                            await future1
-
-                        return {'fullname': user['fullname'], 'email': user['email']}
-                    except:
-                        return None
-                elif node.func.id == 'remove_user':
-                    db = mongo['nodewire']
-                    user = {
-                        'email': thelist[0],
-                        'instance': self.instance,
-                    }
-                    await db.users.delete_many(user)
-                    return None
-                elif node.func.id == 'reset_pwd':
-                    db = mongo['nodewire']
-                    user = {
-                        'email': thelist[0]
-                    }
-                    user = await db.users.find(user).to_list(None)
-
-                    if user == []:
-                        return False
-                    else:
-                        def randomString(stringLength=10):
-                            """Generate a random string of fixed length """
-                            letters = string.ascii_lowercase
-                            return ''.join(random.choice(letters) for i in range(stringLength))
-
-                        token = await self.get_token(thelist[0], user[0]['password'])
-                        newpwd = randomString()
-                        user[0]['password'] = newpwd
-                        await db.users.replace_one({'email': thelist[0]}, user[0])
-
-                        if myemail is not None:
-                            loop = asyncio.get_event_loop()
-                            future1 = loop.run_in_executor(None,
-                            lambda: myemail.send({
-                                "receiver": thelist[0],
-                                "subject": "NodeWire Account Reset",
-                                "body": f'''Dear {user[0]['fullname']}<br><br>
-                                    
-                                    Your temporary password is '{newpwd}'<br><br>
-                                    
-                                    Please click on the following link within one hour to change your password:<br>
-                                    <a href="https://secure.nodewire.org/app/change_pass/?tok={token}">Go to NodeWire Dashboard</a><br><br>
-        
-                                    Regards<br><br>
-        
-        
-                                    NodeWire
-                                    '''
-                            }))
-                            await future1
-                        return True
                 elif node.func.id == 'whois':
                     db = mongo['nodewire']
                     gw = await db.instances.find_one({'instance_id': thelist[0]})
@@ -752,6 +634,10 @@ class ExecutionContext():
                         result = await self.eval_func(fun, thelist, briefcase)
                     elif isinstance(fun, _class):
                         result = await self.eval_class(fun, thelist, briefcase)
+                    elif callable(fun):
+                        result = fun(thelist)
+                        if inspect.iscoroutine(result):
+                            result = await result
                     if not result is None: return result
                 else:
                     raise Exception('undefined function: ' + node.func.id)
