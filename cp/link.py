@@ -1,5 +1,5 @@
 import sys
-from message import Message
+from nodewire import Message
 from config import mongo_client
 import asyncio
 import time
@@ -85,6 +85,8 @@ class Link:
 
     async def login(self, words):
         if len(words) >= 3 and words[1] == 'Gateway':
+            password = None
+            token = None
             try:
                 d_user = None
                 if len(words) == 3:
@@ -95,6 +97,10 @@ class Link:
                         user = decoded['email']
                         gateway = decoded['instance']
                         password = None
+                    elif words[2].startswith('id'):
+                        id = words[2].split('=')[1].strip() if 'id' in words[2] and '=' in words[2] else ''
+                        user = words[2].split('=')[1].strip() if 'user' in words[2] and '=' in words[2] else ''
+                        key = words[2].split('=')[1].strip() if 'key' in words[2] and '=' in words[2] else ''
                     else:
                         return False
                 else:
