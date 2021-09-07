@@ -895,13 +895,13 @@ class Node():
         return json.dumps(self.ports)
 
     def __unicode__(self):
-        return self.name + str(self.ports)
+        return self.name + ': ' + str(self.ports)
 
     def __repr__(self):
-        return self.name + str(self.ports)
+        return self.name + ': ' + str(self.ports)
 
     def __str__(self):
-        return self.name + str(self.ports)
+        return self.name + ': ' + str(self.ports)
 
     def __contains__(self, item):
         return item in self.ports
