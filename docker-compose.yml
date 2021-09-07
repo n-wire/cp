@@ -20,6 +20,7 @@ services:
       - 5001:5001
     environment:
       MONGO_DB: mongodb
+      CP: server
 
   mongodb:
     image : mongo

@@ -85,8 +85,8 @@ Note that you may have to change the node name (pynode) to reflect the name used
 
 Tutorials
 -------------
-- [Creating Nodes on NodeWire Dashboard using HTML and Scripts](https://github.com/n-wire/dashboard/readme.md)
-- [Creating Nodes in Python](https://github.com/n-wire/py_client/README.rst)
+- [Creating Nodes on NodeWire Dashboard using HTML and Scripts](https://github.com/n-wire/dashboard)
+- [Creating Nodes in Python](https://github.com/n-wire/py_client)
 - Creating Nodes in Javascript
 - Creating Nodes using Micropython
 - Creating Nodes in Arduino
