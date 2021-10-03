@@ -1,9 +1,9 @@
 import paho.mqtt.client as mqtt #import the client1
 import time
 
-the_instance = 'hx3f3tc8zct7'
+the_instance = 'k5izbpn65slp'
 the_node = "counter"
-username = "ahmad.s@faxter.com"
+username = "sadiq.a.ahmad@gmail.com"
 password = "aB01@"
 
 def on_message(client, userdata, message):
@@ -31,7 +31,7 @@ def on_disconnect(client, obj, rc):
     print('reconnecting')
     client.reconnect()
 
-broker_address = "localhost" # our broker address
+broker_address = "s2.nodewire.org" # our broker address
 print("creating new instance")
 client = mqtt.Client('counter')  # create new instance
 client.on_message=on_message  # attach function to callback

@@ -1,8 +1,8 @@
-from nodewire.control import control
+from nodewire import Node
 import os
 
 
-class bright(object):
+class bright(Node):
     def on_brightness(self, Sender, Value):
         pass
 
@@ -13,6 +13,6 @@ class bright(object):
         print(Value)
 
 if __name__ == '__main__':
-    ctrl = control(inputs = 'brightness volume', outputs = 'count', handler=bright(), server='localhost')
+    ctrl = bright(inputs = 'brightness volume', outputs = 'count', server='localhost')
     ctrl.nw.debug = True
     ctrl.nw.run()

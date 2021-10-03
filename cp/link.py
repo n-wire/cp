@@ -128,7 +128,7 @@ class Link:
                     gateway = words[-1]
                     d_user = await self.sys_db.users.find_one({'email': user, 'password': password, 'instance': gateway}, {'layout': 0, 'gateways': 0})
                 elif token:
-                     d_user = await self.sys_db.users.find_one({'email': user}, {'layout': 0})
+                     d_user = await self.sys_db.users.find_one({'email': user, 'instance': gateway}, {'layout': 0})
                 elif key:
                     d_user = await self.sys_db.users.find_one({'tokens': {'id': words[-1], 'token': key}}, {'layout': 0, 'gateways': 0})
                     if d_user:
