@@ -1,4 +1,5 @@
 import asyncio
+from logging import exception
 from nodewire import Message
 from socket_link import SocketLink
 from web_link import WebLink
@@ -729,37 +730,40 @@ class CommandProcessor:
 
     async def process(self):
         while True:
-            raw, sender = await self.messages.get()
-            # print(f'received:{raw}<<')
-            message = Message(raw)
-            if message.command == 'error':
-                continue
-            asyncio.Task(self.handle_subscriptions(message))
-            if message.address == 'cp':
-                try:
-                    await self.handle(message, sender)
-                except Exception as ex:
-                    print('error while handling message', ex)
-            elif (message.command in ['get', 'set'] and (await self.access_allowed(message.sender_full, message.address_full, message.command)))\
-                        or (not message.command in ['get', 'set'] and await self.access_allowed(message.address_full, message.sender_full, message.command)):
-                if message.address == 'db':
-                    await self.handle_db(message)
-                elif message.address == 'ee' or message.address in self.execution_contexts[message.address_instance].apps:
-                    await self.handle_ee(message, sender)
-                else:
-                    if 'session' in message.named_params:
-                        clients = [c for c in self.clients if
-                                   message.address in c.nodes and c.instance == message.address_instance and c.session ==
-                                   message.named_params['session']]
+            try:
+                raw, sender = await self.messages.get()
+                # print(f'received:{raw}<<')
+                message = Message(raw)
+                if message.command == 'error':
+                    continue
+                asyncio.Task(self.handle_subscriptions(message))
+                if message.address == 'cp':
+                    try:
+                        await self.handle(message, sender)
+                    except Exception as ex:
+                        print('error while handling message', ex)
+                elif (message.command in ['get', 'set'] and (await self.access_allowed(message.sender_full, message.address_full, message.command)))\
+                            or (not message.command in ['get', 'set'] and await self.access_allowed(message.address_full, message.sender_full, message.command)):
+                    if message.address == 'db':
+                        await self.handle_db(message)
+                    elif message.address == 'ee' or message.address in self.execution_contexts[message.address_instance].apps:
+                        await self.handle_ee(message, sender)
                     else:
-                        clients = [c for c in self.clients if
-                                   message.address in c.nodes and c.gateway == message.address_instance] + \
-                                  [c for c in self.clients if message.address_full in c.nodes and c.safe]
-                    for client in clients:
-                        client.send_queue.put_nowait((raw, client))
-                        if message.command == 'val' and message.sender!='ee':
-                            await self.handle_val(message, sender)
-            self.messages.task_done()
+                        if 'session' in message.named_params:
+                            clients = [c for c in self.clients if
+                                    message.address in c.nodes and c.instance == message.address_instance and c.session ==
+                                    message.named_params['session']]
+                        else:
+                            clients = [c for c in self.clients if
+                                    message.address in c.nodes and c.gateway == message.address_instance] + \
+                                    [c for c in self.clients if message.address_full in c.nodes and c.safe]
+                        for client in clients:
+                            client.send_queue.put_nowait((raw, client))
+                            if message.command == 'val' and message.sender!='ee':
+                                await self.handle_val(message, sender)
+                self.messages.task_done()
+            except Exception as ex:
+                print(ex)
 
     async def run_async(self):
         await asyncio.gather(
