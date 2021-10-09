@@ -583,12 +583,10 @@ class ExecutionContext():
                             self.theapp[email] = app['title']
                             self.reset(app['title'], email)
                             if app['title'] not in self.apps: self.apps.append(app['title'])
-                            for script in app['script']:
+                            for script in app['sketches']:
                                 self.themodule = script['name']
                                 lines = script['content'].splitlines()
                                 await self.engine_process_file(lines, email)
-                            for sketch in app['sketch']:
-                                pass
                             self.theapp[email] = tmp
                             return ''
 
@@ -598,11 +596,9 @@ class ExecutionContext():
                         self.reset(self.theapp[email], email)
                         if self.theapp[email] not in self.apps: self.apps.append(self.theapp[email])
                         appcontent = await db.apps.find_one({'_id': app['app_id']})
-                        for script in appcontent['script']:
+                        for script in appcontent['sketches']:
                             lines = script['content'].splitlines()
                             await self.engine_process_file(lines, email)
-                        for sketch in appcontent['sketch']:
-                            pass
                         return ''
                 elif node.func.id == 'accountInfo':
                     db = mongo['nodewire']

@@ -131,7 +131,7 @@ class CommandProcessor:
                         except Exception as ex:
                             print("{}. couldn't remove node: {}".format(str(ex), node))
             if client.type == 'web' and len(client.nodes)!=0:
-                self.exec_engine.pending_signals.put_nowait(('me.session', client.nodes[0], client.session, client.gateway, client.session))
+                self.exec_engine.pending_signals.put_nowait(('session', client.nodes[0], client.session, client.gateway, client.session))
             client.close()
 
     async def check_id(self, node, gateway, Sender, id, task):
@@ -174,7 +174,7 @@ class CommandProcessor:
             clients = [client for client in self.clients if task == client.task]
             self.terminate_connections(clients)
         except Exception as ex:
-            print(ex)
+            print('checkid error', ex)
             # self.messages.put_nowait((Sender + ' error ' + str(ex).split() + ' cp', None))
 
     def is_auth(self, gateway, nodename, task):
@@ -233,7 +233,7 @@ class CommandProcessor:
                     bc = {'app': msg.address, 'module': self.execution_contexts[msg.sender_instance].themodule, 'variables': {}}
                     val = await self.execution_contexts[msg.sender_instance].evaluate(msg.params[1], bc)
                 cs = [c for c in self.clients if c['task'] == task]
-                signal = ('me.' + msg.params[0], varname, val, msg.sender, cs[0]['session'])
+                signal = ('me.' + msg.params[0], varname, val, msg.sender, cs[0].session)
                 self.exec_engine.pending_signals.put_nowait(signal)
             if varname == 'db':
                 self.execution_contexts[msg.sender_instance].variables['_id'] = msg.params[1]
@@ -297,9 +297,9 @@ class CommandProcessor:
                 await self.execution_contexts[gateway].evaluate(msg.address + '.' + msg.params[0] + '=' + msg.params[1], bc)
                 signal = [msg.params[0], gateway, msg.sender]
                 if not task is None:
-                    cs = [c for c in self.clients if c['task']==task]
-                    if 'session' in cs[0]:
-                        signal.append(cs[0]['session'])
+                    cs = [c for c in self.clients if c.task==task]
+                    if cs[0].session is not None:
+                        signal.append(cs[0].session)
                 self.exec_engine.pending_signals.put_nowait(signal)
                 if msg.address != 'ee':
                     self.messages.put_nowait(('{} val {} {} {}:{}'.format(msg.sender_full, msg.params[0], msg.params[1], gateway, msg.address_full), None))
@@ -687,7 +687,7 @@ class CommandProcessor:
                                     content[port] = self.execution_contexts[nodeinstance].get_val(port, bc)
                                 except:
                                     content[port] = None
-                            response = '{} node {} {} {} {} cp'.format(message.sender, json.dumps(content), nodename, nodeinstance, nodename)
+                            response = '{} node {} {} {} {} cp'.format(message.sender_full, json.dumps(content), nodename, nodeinstance, nodename)
                             self.messages.put_nowait((response, None))
                         else:
                             #node not online
@@ -725,45 +725,48 @@ class CommandProcessor:
             try:
                 await client.send(raw_msg)
             except Exception as ex:
-                print(ex)
+                print('message sender error', ex)
                 self.terminate_connections([client])
 
     async def process(self):
         while True:
-            try:
-                raw, sender = await self.messages.get()
-                # print(f'received:{raw}<<')
-                message = Message(raw)
-                if message.command == 'error':
-                    continue
-                asyncio.Task(self.handle_subscriptions(message))
-                if message.address == 'cp':
+            #try:
+            raw, sender = await self.messages.get()
+            # print(f'received:{raw}<<')
+            message = Message(raw)
+            if message.command == 'error':
+                continue
+            asyncio.Task(self.handle_subscriptions(message))
+            if message.address == 'cp':
+                try:
+                    await self.handle(message, sender)
+                except Exception as ex:
+                    print('error while handling message', message, ex)
+            elif (message.command in ['get', 'set'] and (await self.access_allowed(message.sender_full, message.address_full, message.command)))\
+                        or (not message.command in ['get', 'set'] and await self.access_allowed(message.address_full, message.sender_full, message.command)):
+                if message.address == 'db':
+                    await self.handle_db(message)
+                elif message.address == 'ee' or message.address in self.execution_contexts[message.address_instance].apps:
                     try:
-                        await self.handle(message, sender)
-                    except Exception as ex:
-                        print('error while handling message', ex)
-                elif (message.command in ['get', 'set'] and (await self.access_allowed(message.sender_full, message.address_full, message.command)))\
-                            or (not message.command in ['get', 'set'] and await self.access_allowed(message.address_full, message.sender_full, message.command)):
-                    if message.address == 'db':
-                        await self.handle_db(message)
-                    elif message.address == 'ee' or message.address in self.execution_contexts[message.address_instance].apps:
                         await self.handle_ee(message, sender)
+                    except Exception as ex:
+                        print('error in ee while handling message', message, ex)
+                else:
+                    if 'session' in message.named_params:
+                        clients = [c for c in self.clients if
+                                message.address in c.nodes and c.instance == message.address_instance and c.session ==
+                                message.named_params['session']]
                     else:
-                        if 'session' in message.named_params:
-                            clients = [c for c in self.clients if
-                                    message.address in c.nodes and c.instance == message.address_instance and c.session ==
-                                    message.named_params['session']]
-                        else:
-                            clients = [c for c in self.clients if
-                                    message.address in c.nodes and c.gateway == message.address_instance] + \
-                                    [c for c in self.clients if message.address_full in c.nodes and c.safe]
-                        for client in clients:
-                            client.send_queue.put_nowait((raw, client))
-                            if message.command == 'val' and message.sender!='ee':
-                                await self.handle_val(message, sender)
-                self.messages.task_done()
-            except Exception as ex:
-                print(ex)
+                        clients = [c for c in self.clients if
+                                message.address in c.nodes and c.gateway == message.address_instance] + \
+                                [c for c in self.clients if message.address_full in c.nodes and c.safe]
+                    for client in clients:
+                        client.send_queue.put_nowait((raw, client))
+                        if message.command == 'val' and message.sender!='ee':
+                            await self.handle_val(message, sender)
+            self.messages.task_done()
+            #except Exception as ex:
+            #    print('pass unknowns', ex)
 
     async def run_async(self):
         await asyncio.gather(
